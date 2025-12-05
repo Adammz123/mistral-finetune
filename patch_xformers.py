@@ -13,22 +13,29 @@ import sys
 def patch_xformers():
     """Find and patch the xformers dispatch.py file to disable flash attention 3"""
 
-    # Find xformers installation path
-    xformers_path = None
+    # Check multiple possible locations for dispatch.py
+    dispatch_file = None
+    
     for path in site.getsitepackages() + [site.getusersitepackages()]:
-        if path and os.path.exists(path):
-            xformers_dirs = glob.glob(os.path.join(path, 'xformers*'))
-            if xformers_dirs:
-                xformers_path = xformers_dirs[0]
-                break
+        if not path or not os.path.exists(path):
+            continue
+            
+        # First try xformers-0.0.32.post2.dist-info
+        candidate = os.path.join(path, 'xformers-0.0.32.post2.dist-info', 'ops', 'fmha', 'dispatch.py')
+        if os.path.exists(candidate):
+            dispatch_file = candidate
+            print(f"INFO: Found dispatch.py in xformers-0.0.32.post2.dist-info")
+            break
+        
+        # If not found, try xformers
+        candidate = os.path.join(path, 'xformers', 'ops', 'fmha', 'dispatch.py')
+        if os.path.exists(candidate):
+            dispatch_file = candidate
+            print(f"INFO: Found dispatch.py in xformers")
+            break
 
-    if not xformers_path:
-        print("ERROR: xformers package not found")
-        return False
-
-    dispatch_file = os.path.join(xformers_path, 'ops', 'fmha', 'dispatch.py')
-    if not os.path.exists(dispatch_file):
-        print(f"ERROR: dispatch.py not found at {dispatch_file}")
+    if not dispatch_file:
+        print("ERROR: dispatch.py not found in either xformers-0.0.32.post2.dist-info or xformers")
         return False
 
     try:
