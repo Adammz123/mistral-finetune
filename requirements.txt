@@ -7,5 +7,10 @@ tensorboard
 tqdm
 
 torch
-triton==2.2
+triton==3.4.0
 xformers
+pandas
+pyarrow
+fastparquet
+mistral-common[sentencepiece]
+
