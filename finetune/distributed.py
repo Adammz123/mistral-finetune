@@ -26,17 +26,18 @@ def get_world_size() -> int:
 
 
 def visible_devices() -> List[int]:
-    return [int(d) for d in os.environ["CUDA_VISIBLE_DEVICES"].split(",")]
+    if "CUDA_VISIBLE_DEVICES" in os.environ:
+        return [int(d) for d in os.environ["CUDA_VISIBLE_DEVICES"].split(",")]
+    return list(range(torch.cuda.device_count()))
 
 
 def set_device():
     logger.info(f"torch.cuda.device_count: {torch.cuda.device_count()}")
-    logger.info(f"CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
+    cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
+    logger.info(f"CUDA_VISIBLE_DEVICES: {cuda_visible}")
     logger.info(f"local rank: {int(os.environ['LOCAL_RANK'])}")
 
     assert torch.cuda.is_available()
-
-    assert len(visible_devices()) == torch.cuda.device_count()
 
     if torch.cuda.device_count() == 1:
         # gpus-per-task set to 1
