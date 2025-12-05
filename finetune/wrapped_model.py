@@ -126,7 +126,7 @@ def load_model(
     lora: LoraArgs,
     checkpoint: bool,
     param_dtype: torch.dtype,
-) -> FullyShardedDataParallel:
+) -> Union[FullyShardedDataParallel, Transformer]:
     model_args = load_args(folder, lora)
 
     if model_args.vocab_size == 32000:
@@ -138,6 +138,37 @@ def load_model(
         model_args.vocab_size >= 32768
     ), "Make sure to use a model with a vocab size of at least 32768"
 
+    # Check if we're running in distributed mode
+    is_distributed = torch.distributed.is_initialized()
+
+    if not is_distributed:
+        # Non-distributed mode: load model directly to GPU
+        model = Transformer(args=model_args, checkpoint=checkpoint)
+        state_dict = load_state_dict(folder, dtype=param_dtype)
+        model.load_state_dict(state_dict, assign=True)  # type: ignore
+        logger.info("Loaded model on cpu!")
+
+        if lora.enable:
+            logger.info("Initializing lora layers ...")
+            # initialize LoRA layers
+            initialize_lora_parameters(model, param_dtype)
+
+        # Move model to GPU
+        model = model.cuda()
+        
+        # only finetune LoRA parameters
+        if lora.enable:
+            for name, param in model.named_parameters():
+                if "lora" in name:
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+
+        logger.info("Finished initialization!")
+        log_train_params(model)
+        return model
+
+    # Distributed mode: use FSDP
     with torch.device("meta"):
         model = Transformer(args=model_args, checkpoint=checkpoint)
 

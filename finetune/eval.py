@@ -1,7 +1,8 @@
 import logging
-from typing import List
+from typing import List, Union
 
 import numpy as np
+import torch
 import torch.cuda
 import torch.distributed as dist
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel
@@ -20,7 +21,7 @@ def main_logger_info(message: str) -> None:
 
 
 def evaluate(
-    model: FullyShardedDataParallel,
+    model: Union[FullyShardedDataParallel, torch.nn.Module],
     batches: List[Batch],
     state: TrainState,
 ):
@@ -28,7 +29,10 @@ def evaluate(
     num_samples = torch.tensor([len(batches)], device="cuda", dtype=torch.long)
     all_num_samples = [torch.zeros_like(num_samples) for _ in range(get_world_size())]
 
-    torch.distributed.all_gather(all_num_samples, num_samples)
+    if dist.is_initialized():
+        torch.distributed.all_gather(all_num_samples, num_samples)
+    else:
+        all_num_samples = [num_samples]
 
     total_num_samples = int(torch.tensor(all_num_samples).sum().item())
     max_num_samples = int(torch.tensor(all_num_samples).max().item())
@@ -67,8 +71,11 @@ def evaluate(
     # sum loss
     main_logger_info("Eval finished!")
 
-    dist.all_reduce(eval_loss, op=dist.ReduceOp.SUM)
-    eval_loss /= total_num_samples
+    if dist.is_initialized():
+        dist.all_reduce(eval_loss, op=dist.ReduceOp.SUM)
+        eval_loss /= total_num_samples
+    else:
+        eval_loss /= total_num_samples
 
     state.this_eval_loss = eval_loss.item()
     state.this_eval_perplexity = (2**eval_loss).item()

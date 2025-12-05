@@ -29,7 +29,7 @@ class Checkpointer:
 
     def __init__(
         self,
-        model: FullyShardedDataParallel,
+        model: Union[FullyShardedDataParallel, torch.nn.Module],
         state: TrainState,
         run_dir: Union[Path, str],
         optimizer: Optional[torch.optim.Optimizer] = None,
@@ -41,6 +41,7 @@ class Checkpointer:
         self.run_dir = Path(run_dir)
         self.rank = get_rank()
         self.num_ckpt_keep = num_ckpt_keep
+        self.is_fsdp = isinstance(model, FullyShardedDataParallel)
 
     @property
     def ckpt_dir(self) -> Path:
@@ -133,6 +134,16 @@ class Checkpointer:
                         merge_lora
                     )
 
+        # Handle non-FSDP models (single GPU, no distributed)
+        if not self.is_fsdp:
+            if save_only_lora:
+                states = self.get_lora_states(self.model.state_dict())
+            else:
+                states = self.get_non_lora_states(self.model.state_dict())
+            states = {k: v.to(dtype=save_dtype) for k, v in states.items()}
+            states = dict(sorted(states.items()))
+            return states
+
         offload_to_cpu = get_world_size() > 1
         if save_only_lora:
 
@@ -220,7 +231,8 @@ class Checkpointer:
             save_only_lora, dtype
         )
 
-        barrier()
+        if torch.distributed.is_initialized():
+            barrier()
 
         if self.rank == 0:
             # save checkpoint in tmp path
