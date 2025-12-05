@@ -94,7 +94,8 @@ def _train(
                 f"Run dir {run_dir} already exists. Make sure to either rename `run_dir` or remove {run_dir}."
             )
 
-    dist.barrier()
+    if dist.is_initialized():
+        dist.barrier()
     run_dir.mkdir(exist_ok=True, parents=True)
 
     args_path = run_dir / "args.yaml"

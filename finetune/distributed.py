@@ -13,12 +13,16 @@ BACKEND = "nccl"
 
 @lru_cache()
 def get_rank() -> int:
-    return dist.get_rank()
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_rank()
+    return 0
 
 
 @lru_cache()
 def get_world_size() -> int:
-    return dist.get_world_size()
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_world_size()
+    return 1
 
 
 def visible_devices() -> List[int]:
@@ -50,6 +54,8 @@ def set_device():
 
 
 def avg_aggregate(metric: Union[float, int]) -> Union[float, int]:
+    if not dist.is_available() or not dist.is_initialized():
+        return metric
     buffer = torch.tensor([metric], dtype=torch.float32, device="cuda")
     dist.all_reduce(buffer, op=dist.ReduceOp.SUM)
     return buffer[0].item() / get_world_size()
