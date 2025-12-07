@@ -12,6 +12,7 @@ import hashlib
 
 import pdfplumber
 import pandas as pd
+from tqdm import tqdm
 
 
 # Setup logging
@@ -121,7 +122,6 @@ class RFQDatasetProcessor:
         }
         
         try:
-            logger.info(f"Extracting text from: {pdf_path.name}")
             
             with pdfplumber.open(pdf_path) as pdf:
                 result['page_count'] = len(pdf.pages)
@@ -166,8 +166,6 @@ class RFQDatasetProcessor:
                 result['text_length'] = len(full_text)
                 result['pages'] = page_texts
                 result['success'] = True
-                
-                logger.info(f"Successfully extracted {result['text_length']} characters from {result['page_count']} pages")
                 
         except Exception as e:
             error_msg = f"Error processing PDF {pdf_path.name}: {str(e)}"
@@ -291,8 +289,8 @@ class RFQDatasetProcessor:
     
     def process_dataset(self) -> None:
         """Process all PDFs from all folders and create training dataset."""
-        logger.info("Starting dataset processing...")
-        logger.info(f"Processing {len(self.pdf_folders)} PDF folder(s)")
+        print("Starting dataset processing...")
+        print(f"Processing {len(self.pdf_folders)} PDF template folder(s)")
         
         # Load ground truth
         ground_truth_df = self.load_ground_truth_from_xlsx()
@@ -301,14 +299,14 @@ class RFQDatasetProcessor:
         all_pdf_files = []
         for folder in self.pdf_folders:
             pdf_files = list(folder.glob('*.pdf'))
-            logger.info(f"Found {len(pdf_files)} PDF files in {folder.name}")
+            print(f"Found {len(pdf_files)} PDF files in {folder.name}")
             all_pdf_files.extend([(pdf_path, folder.name) for pdf_path in pdf_files])
         
         if not all_pdf_files:
             logger.error(f"No PDF files found in any of the {len(self.pdf_folders)} folder(s)")
             return
         
-        logger.info(f"Total PDF files to process: {len(all_pdf_files)}")
+        print(f"Total PDF files to process: {len(all_pdf_files)}\n")
         
         # Create output directory if it doesn't exist
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -319,104 +317,102 @@ class RFQDatasetProcessor:
         skipped_count = 0
         folder_stats = {}
         
-        for pdf_path, folder_name in all_pdf_files:
-            if folder_name not in folder_stats:
-                folder_stats[folder_name] = {'processed': 0, 'skipped': 0}
-            logger.info(f"\nProcessing: {folder_name}/{pdf_path.name}")
-            
-            # Extract text from PDF
-            extraction_result = self.extract_text_from_pdf(pdf_path)
-            
-            if not extraction_result['success']:
-                logger.warning(f"Skipping {folder_name}/{pdf_path.name} due to extraction error")
-                skipped_count += 1
-                folder_stats[folder_name]['skipped'] += 1
-                continue
-            
-            pdf_text = extraction_result['text_content']
-            
-            # Find matching ground truth by row index
-            # Filename format: tmp_N.pdf or name_N.pdf where N is the row number in Excel
-            pdf_stem = pdf_path.stem  # filename without extension
-            
-            # Extract number from filename (e.g., "tmp_1204.pdf" -> "1204")
-            number_match = re.search(r'\d+', pdf_stem)
-            
-            matching_rows = pd.DataFrame()
-            match_strategy = None
-            
-            if number_match:
-                extracted_number = int(number_match.group())
+        # Use tqdm for progress bar
+        with tqdm(total=len(all_pdf_files), desc="Processing PDFs", unit="pdf") as pbar:
+            for pdf_path, folder_name in all_pdf_files:
+                if folder_name not in folder_stats:
+                    folder_stats[folder_name] = {'processed': 0, 'skipped': 0}
                 
-                # Strategy 1: Row index matching (primary strategy)
-                # Try 0-indexed first (pandas default)
-                if 0 <= extracted_number < len(ground_truth_df):
-                    matching_rows = ground_truth_df.iloc[[extracted_number]]
-                    match_strategy = f"row_index={extracted_number} (0-indexed)"
+                # Update progress bar description with current file
+                pbar.set_postfix_str(f"{pdf_path.stem}")
                 
-                # Strategy 2: Try 1-indexed (Excel row number accounting for header row)
-                # Row 1 in Excel (after header) = pandas index 0
-                # So Excel row N = pandas index N-1
-                elif matching_rows.empty and 1 <= extracted_number <= len(ground_truth_df):
-                    matching_rows = ground_truth_df.iloc[[extracted_number - 1]]
-                    match_strategy = f"Excel_row={extracted_number} (pandas_index={extracted_number - 1})"
+                # Extract text from PDF
+                extraction_result = self.extract_text_from_pdf(pdf_path)
                 
-                # Strategy 3: Fallback - try matching quotation_id if row index fails
+                if not extraction_result['success']:
+                    tqdm.write(f"⚠️  Extraction error: {folder_name}/{pdf_path.name}")
+                    skipped_count += 1
+                    folder_stats[folder_name]['skipped'] += 1
+                    pbar.update(1)
+                    continue
+                
+                pdf_text = extraction_result['text_content']
+                
+                # Find matching ground truth by row index
+                # Filename format: tmp_N.pdf or name_N.pdf where N is the row number in Excel
+                pdf_stem = pdf_path.stem
+                
+                # Extract number from filename (e.g., "tmp_1204.pdf" -> "1204")
+                number_match = re.search(r'\d+', pdf_stem)
+                
+                matching_rows = pd.DataFrame()
+                match_strategy = None
+                
+                if number_match:
+                    extracted_number = int(number_match.group())
+                    
+                    # Strategy 1: Row index matching (0-indexed, pandas default)
+                    if 0 <= extracted_number < len(ground_truth_df):
+                        matching_rows = ground_truth_df.iloc[[extracted_number]]
+                        match_strategy = f"row_{extracted_number}"
+                    
+                    # Strategy 2: Try 1-indexed (Excel row accounting for header)
+                    elif matching_rows.empty and 1 <= extracted_number <= len(ground_truth_df):
+                        matching_rows = ground_truth_df.iloc[[extracted_number - 1]]
+                        match_strategy = f"excel_row_{extracted_number}"
+                    
+                    # Strategy 3: Fallback - try matching quotation_id
+                    if matching_rows.empty:
+                        matching_rows = ground_truth_df[
+                            ground_truth_df['quotation_id'].astype(str) == str(extracted_number)
+                        ]
+                        if not matching_rows.empty:
+                            match_strategy = f"quote_id"
+                else:
+                    # No number in filename - try file_name column if it exists
+                    if 'file_name' in ground_truth_df.columns:
+                        matching_rows = ground_truth_df[
+                            ground_truth_df['file_name'].astype(str).str.contains(pdf_stem, case=False, na=False, regex=False)
+                        ]
+                        if not matching_rows.empty:
+                            match_strategy = f"filename"
+                
                 if matching_rows.empty:
-                    matching_rows = ground_truth_df[
-                        ground_truth_df['quotation_id'].astype(str) == str(extracted_number)
-                    ]
-                    if not matching_rows.empty:
-                        match_strategy = f"quotation_id={extracted_number}"
-            else:
-                # No number in filename - try file_name column if it exists
-                if 'file_name' in ground_truth_df.columns:
-                    matching_rows = ground_truth_df[
-                        ground_truth_df['file_name'].astype(str).str.contains(pdf_stem, case=False, na=False, regex=False)
-                    ]
-                    if not matching_rows.empty:
-                        match_strategy = f"file_name contains '{pdf_stem}'"
-            
-            if matching_rows.empty:
-                logger.warning(f"No ground truth found for {folder_name}/{pdf_path.name} (number: {extracted_number if number_match else 'none'}, rows available: 0-{len(ground_truth_df)-1})")
-                skipped_count += 1
-                folder_stats[folder_name]['skipped'] += 1
-                continue
-            
-            logger.info(f"Found {len(matching_rows)} matching row(s) for {folder_name}/{pdf_path.name} (strategy: {match_strategy})")
-            
-            # Group by quotation_id and merge all rows for the same quotation
-            # (in case multiple rows exist for same quotation with different parts)
-            for quotation_id, group in matching_rows.groupby('quotation_id'):
-                # If multiple rows for same quotation, we'll merge all parts
-                # For now, just use the first row (since each row can have up to 3 parts)
-                row = group.iloc[0]
+                    tqdm.write(f"⚠️  No ground truth: {folder_name}/{pdf_path.name}")
+                    skipped_count += 1
+                    folder_stats[folder_name]['skipped'] += 1
+                    pbar.update(1)
+                    continue
                 
-                ground_truth_json = self.format_ground_truth_to_json(row)
-                training_sample = self.create_training_sample(pdf_text, ground_truth_json)
-                training_samples.append(training_sample)
-                processed_count += 1
-                folder_stats[folder_name]['processed'] += 1
+                # Group by quotation_id and create training samples
+                for quotation_id, group in matching_rows.groupby('quotation_id'):
+                    row = group.iloc[0]
+                    
+                    ground_truth_json = self.format_ground_truth_to_json(row)
+                    training_sample = self.create_training_sample(pdf_text, ground_truth_json)
+                    training_samples.append(training_sample)
+                    processed_count += 1
+                    folder_stats[folder_name]['processed'] += 1
                 
-                logger.info(f"✓ Created training sample for {folder_name}/quotation_{quotation_id} with {len(ground_truth_json['parts'])} part(s)")
+                pbar.update(1)
         
         # Write to JSONL file
-        logger.info(f"\n{'='*80}")
-        logger.info(f"Writing {len(training_samples)} training samples to {self.output_path}")
+        print(f"\n{'='*80}")
+        print(f"Writing {len(training_samples)} training samples to {self.output_path}")
         
         with open(self.output_path, 'w', encoding='utf-8') as f:
             for sample in training_samples:
                 f.write(json.dumps(sample, ensure_ascii=False) + '\n')
         
-        logger.info(f"{'='*80}")
-        logger.info(f"Dataset processing complete!")
-        logger.info(f"✓ Processed: {processed_count} quotations")
-        logger.info(f"✗ Skipped: {skipped_count} files")
-        logger.info(f"\nBreakdown by folder:")
-        for folder_name, stats in folder_stats.items():
-            logger.info(f"  {folder_name}: {stats['processed']} processed, {stats['skipped']} skipped")
-        logger.info(f"\n📁 Output: {self.output_path}")
-        logger.info(f"{'='*80}")
+        print(f"{'='*80}")
+        print(f"✅ Dataset processing complete!")
+        print(f"✓ Processed: {processed_count} quotations")
+        print(f"✗ Skipped: {skipped_count} files")
+        print(f"\nBreakdown by folder:")
+        for folder_name, stats in sorted(folder_stats.items()):
+            print(f"  {folder_name}: {stats['processed']} processed, {stats['skipped']} skipped")
+        print(f"\n📁 Output: {self.output_path}")
+        print(f"{'='*80}")
 
 
 def main():
