@@ -400,9 +400,26 @@ class RFQDatasetProcessor:
         print(f"\n{'='*80}")
         print(f"Writing {len(training_samples)} training samples to {self.output_path}")
         
-        with open(self.output_path, 'w', encoding='utf-8') as f:
-            for sample in training_samples:
-                f.write(json.dumps(sample, ensure_ascii=False) + '\n')
+        # Check if output_path is a directory, and if so, create a default filename
+        output_file = self.output_path
+        if output_file.is_dir():
+            output_file = output_file / 'rfq_training_data.jsonl'
+            print(f"Output path is a directory, using: {output_file}")
+        
+        # Ensure parent directory exists
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                for sample in training_samples:
+                    f.write(json.dumps(sample, ensure_ascii=False) + '\n')
+        except PermissionError as e:
+            print(f"\n❌ ERROR: Permission denied when writing to {output_file}")
+            print(f"   Make sure:")
+            print(f"   1. The path is a file (not a directory)")
+            print(f"   2. You have write permissions")
+            print(f"   3. The file is not open in another program")
+            raise
         
         print(f"{'='*80}")
         print(f"✅ Dataset processing complete!")
@@ -411,7 +428,7 @@ class RFQDatasetProcessor:
         print(f"\nBreakdown by folder:")
         for folder_name, stats in sorted(folder_stats.items()):
             print(f"  {folder_name}: {stats['processed']} processed, {stats['skipped']} skipped")
-        print(f"\n📁 Output: {self.output_path}")
+        print(f"\n📁 Output: {output_file}")
         print(f"{'='*80}")
 
 
