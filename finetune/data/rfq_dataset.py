@@ -25,23 +25,56 @@ logger = logging.getLogger(__name__)
 class RFQDatasetProcessor:
     """Process RFQ quotations from PDFs and ground truth XLSX files."""
     
-    def __init__(self, pdf_folder: Path, xlsx_path: Path, output_path: Path):
+    def __init__(self, pdf_parent_folder: Path, xlsx_path: Path, output_path: Path):
         """
         Initialize the RFQ dataset processor.
         
         Args:
-            pdf_folder: Path to folder containing quotation PDFs
+            pdf_parent_folder: Path to parent folder containing subdirectories of quotation PDFs
+                              Each subdirectory represents a different PDF format/template
             xlsx_path: Path to XLSX file with ground truth data
             output_path: Path to output JSONL file
         """
-        self.pdf_folder = Path(pdf_folder)
+        self.pdf_parent_folder = Path(pdf_parent_folder)
         self.xlsx_path = Path(xlsx_path)
         self.output_path = Path(output_path)
         
-        if not self.pdf_folder.exists():
-            raise ValueError(f"PDF folder does not exist: {self.pdf_folder}")
+        # Validate parent folder exists
+        if not self.pdf_parent_folder.exists():
+            raise ValueError(f"PDF parent folder does not exist: {self.pdf_parent_folder}")
+        
         if not self.xlsx_path.exists():
             raise ValueError(f"XLSX file does not exist: {self.xlsx_path}")
+        
+        # Automatically discover subdirectories containing PDFs
+        self.pdf_folders = self._discover_pdf_folders()
+        
+        if not self.pdf_folders:
+            raise ValueError(f"No subdirectories with PDF files found in {self.pdf_parent_folder}")
+        
+        logger.info(f"Discovered {len(self.pdf_folders)} PDF template folder(s):")
+        for folder in self.pdf_folders:
+            pdf_count = len(list(folder.glob('*.pdf')))
+            logger.info(f"  - {folder.name}: {pdf_count} PDF(s)")
+    
+    def _discover_pdf_folders(self) -> List[Path]:
+        """
+        Automatically discover subdirectories containing PDF files.
+        
+        Returns:
+            List of paths to subdirectories containing PDF files
+        """
+        pdf_folders = []
+        
+        # Check all subdirectories
+        for item in self.pdf_parent_folder.iterdir():
+            if item.is_dir():
+                # Check if this directory contains any PDF files
+                pdf_files = list(item.glob('*.pdf'))
+                if pdf_files:
+                    pdf_folders.append(item)
+        
+        return sorted(pdf_folders)  # Sort for consistent ordering
     
     @staticmethod
     def get_standard_quotation_with_price_breaks_prompt(text: str) -> str:
@@ -159,6 +192,7 @@ class RFQDatasetProcessor:
     def format_ground_truth_to_json(self, row: pd.Series) -> Dict[str, Any]:
         """
         Format a ground truth row into the expected JSON structure.
+        This handles the specific format where each row may contain up to 3 parts.
         
         Args:
             row: A row from the ground truth DataFrame
@@ -166,58 +200,49 @@ class RFQDatasetProcessor:
         Returns:
             Dictionary in the expected JSON format
         """
-        # Create the base structure
+        # Create the base structure with quotation-level information
         quotation_data = {
-            "supplier_name": row.get('supplier_name', None),
+            "supplier_name": str(row.get('supplier_name', '')) if pd.notna(row.get('supplier_name')) else None,
             "quotation_id": str(row.get('quotation_id', '')),
-            "valid_until_date": row.get('valid_until_date', None),
-            "incoterms": row.get('incoterms', None),
-            "payment_terms": row.get('payment_terms', None),
-            "warranty_terms": row.get('warranty_terms', None),
-            "currency": row.get('currency', 'USD'),
-            "additional_notes": row.get('additional_notes', None),
+            "valid_until_date": str(row.get('valid_until_date', ''))[:10] if pd.notna(row.get('valid_until_date')) else None,
+            "incoterms": str(row.get('incoterms', '')) if pd.notna(row.get('incoterms')) and str(row.get('incoterms', '')).lower() not in ['null', 'nan', 'none', ''] else None,
+            "payment_terms": str(row.get('payment_terms', '')) if pd.notna(row.get('payment_terms')) and str(row.get('payment_terms', '')).lower() not in ['null', 'nan', 'none', ''] else None,
+            "warranty_terms": str(row.get('warranty_terms', '')) if pd.notna(row.get('warranty_terms')) and str(row.get('warranty_terms', '')).lower() not in ['null', 'nan', 'none', ''] else None,
+            "currency": str(row.get('currency', 'USD')),
+            "additional_notes": str(row.get('additional_notes', '')) if pd.notna(row.get('additional_notes')) else None,
             "parts": []
         }
         
-        # Parse parts information - assuming parts are stored as JSON string in the XLSX
-        # or multiple columns with part information
-        if 'parts' in row and pd.notna(row['parts']):
-            try:
-                # If parts is already a JSON string
-                if isinstance(row['parts'], str):
-                    quotation_data['parts'] = json.loads(row['parts'])
-                else:
-                    quotation_data['parts'] = row['parts']
-            except json.JSONDecodeError:
-                logger.warning(f"Could not parse parts JSON for quotation {row.get('quotation_id', 'unknown')}")
-        else:
-            # Build parts array from individual columns
+        # Process up to 3 parts per row (part1, part2, part3)
+        # Part 1 has no suffix, Part 2 has "2" suffix, Part 3 has "3" suffix
+        part_suffixes = ['', '2', '3']
+        
+        for suffix in part_suffixes:
+            # Check if this part exists (part_number is required)
+            part_num_col = f'part_number{suffix}' if suffix else 'part_number'
+            
+            if part_num_col not in row or not pd.notna(row.get(part_num_col)):
+                continue
+            
+            # Build part information
             part = {
-                "part_number": row.get('part_number', ''),
-                "part_description": row.get('part_description', ''),
-                "manufacturer": row.get('manufacturer', ''),
-                "unit_of_measure": row.get('unit_of_measure', ''),
-                "lead_time_days_weeks": row.get('lead_time_days_weeks', ''),
-                "tariff_charge": row.get('tariff_charge', 'N/A'),
+                "part_number": str(row.get(f'part_number{suffix}', '')) if pd.notna(row.get(f'part_number{suffix}')) else '',
+                "part_description": str(row.get(f'part_description{suffix}', '')) if pd.notna(row.get(f'part_description{suffix}')) else '',
+                "manufacturer": f"{row.get('manufacturer', '')} / {row.get(f'Vendor Part Number{suffix}', '')}" if pd.notna(row.get(f'Vendor Part Number{suffix}')) else str(row.get('manufacturer', '')),
+                "unit_of_measure": str(row.get(f'unit_of_measure{suffix}', '')) if pd.notna(row.get(f'unit_of_measure{suffix}')) else '',
+                "lead_time_days_weeks": str(row.get(f'lead_time_days_weeks{suffix}', '')) if pd.notna(row.get(f'lead_time_days_weeks{suffix}')) else '',
+                "tariff_charge": str(row.get('tariff_charge', 'N/A')) if suffix == '' else 'N/A',  # Only first part has tariff
                 "price_breaks": []
             }
             
-            # Parse price breaks - assuming they're in JSON format or separate columns
-            if 'price_breaks' in row and pd.notna(row['price_breaks']):
-                try:
-                    if isinstance(row['price_breaks'], str):
-                        part['price_breaks'] = json.loads(row['price_breaks'])
-                    else:
-                        part['price_breaks'] = row['price_breaks']
-                except json.JSONDecodeError:
-                    logger.warning(f"Could not parse price_breaks for part {part['part_number']}")
-            else:
-                # Build price break from individual columns
+            # Build price break for this part
+            quantity_col = f'quantity{suffix}' if suffix else 'quantity'
+            if pd.notna(row.get(quantity_col)):
                 price_break = {
-                    "quantity": int(row.get('quantity', 0)) if pd.notna(row.get('quantity')) else 0,
-                    "minimum_order_quantity": int(row.get('minimum_order_quantity', 0)) if pd.notna(row.get('minimum_order_quantity')) else 0,
-                    "price_per_unit": float(row.get('price_per_unit', 0.0)) if pd.notna(row.get('price_per_unit')) else 0.0,
-                    "total_price": float(row.get('total_price', 0.0)) if pd.notna(row.get('total_price')) else 0.0
+                    "quantity": int(row.get(quantity_col, 0)) if pd.notna(row.get(quantity_col)) else 0,
+                    "minimum_order_quantity": int(row.get(quantity_col, 0)) if pd.notna(row.get(quantity_col)) else 0,  # Use same as quantity if MOQ not available
+                    "price_per_unit": float(row.get(f'price_per_unit{suffix}', 0.0)) if pd.notna(row.get(f'price_per_unit{suffix}')) else 0.0,
+                    "total_price": float(row.get(f'total_price{suffix}', 0.0)) if pd.notna(row.get(f'total_price{suffix}')) else 0.0
                 }
                 part['price_breaks'].append(price_break)
             
@@ -265,60 +290,119 @@ class RFQDatasetProcessor:
         return sample
     
     def process_dataset(self) -> None:
-        """Process all PDFs and create training dataset."""
+        """Process all PDFs from all folders and create training dataset."""
         logger.info("Starting dataset processing...")
+        logger.info(f"Processing {len(self.pdf_folders)} PDF folder(s)")
         
         # Load ground truth
         ground_truth_df = self.load_ground_truth_from_xlsx()
         
-        # Get all PDF files
-        pdf_files = list(self.pdf_folder.glob('*.pdf'))
-        logger.info(f"Found {len(pdf_files)} PDF files")
+        # Collect all PDF files from all folders
+        all_pdf_files = []
+        for folder in self.pdf_folders:
+            pdf_files = list(folder.glob('*.pdf'))
+            logger.info(f"Found {len(pdf_files)} PDF files in {folder.name}")
+            all_pdf_files.extend([(pdf_path, folder.name) for pdf_path in pdf_files])
+        
+        if not all_pdf_files:
+            logger.error(f"No PDF files found in any of the {len(self.pdf_folders)} folder(s)")
+            return
+        
+        logger.info(f"Total PDF files to process: {len(all_pdf_files)}")
         
         # Create output directory if it doesn't exist
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Process each PDF and create training samples
         training_samples = []
+        processed_count = 0
+        skipped_count = 0
+        folder_stats = {}
         
-        for pdf_path in pdf_files:
+        for pdf_path, folder_name in all_pdf_files:
+            if folder_name not in folder_stats:
+                folder_stats[folder_name] = {'processed': 0, 'skipped': 0}
+            logger.info(f"\nProcessing: {folder_name}/{pdf_path.name}")
+            
             # Extract text from PDF
             extraction_result = self.extract_text_from_pdf(pdf_path)
             
             if not extraction_result['success']:
-                logger.warning(f"Skipping {pdf_path.name} due to extraction error")
+                logger.warning(f"Skipping {folder_name}/{pdf_path.name} due to extraction error")
+                skipped_count += 1
+                folder_stats[folder_name]['skipped'] += 1
                 continue
             
             pdf_text = extraction_result['text_content']
             
             # Find matching ground truth - match by filename or quotation_id
-            # Assuming the PDF filename contains the quotation_id
+            # Try multiple matching strategies
             pdf_stem = pdf_path.stem  # filename without extension
             
-            # Try to find matching row in ground truth
-            matching_rows = ground_truth_df[
-                ground_truth_df['quotation_id'].astype(str).str.contains(pdf_stem, case=False, na=False) |
-                ground_truth_df.get('file_name', pd.Series(dtype=str)).str.contains(pdf_stem, case=False, na=False)
-            ]
+            # Strategy 1: Extract quotation_id from filename (e.g., "quote_106094.pdf" -> "106094")
+            quotation_id_match = re.search(r'\d+', pdf_stem)
+            
+            matching_rows = pd.DataFrame()
+            
+            if quotation_id_match:
+                quotation_id = quotation_id_match.group()
+                # Try exact match first
+                matching_rows = ground_truth_df[
+                    ground_truth_df['quotation_id'].astype(str) == quotation_id
+                ]
+            
+            # Strategy 2: If no exact match, try contains
+            if matching_rows.empty:
+                matching_rows = ground_truth_df[
+                    ground_truth_df['quotation_id'].astype(str).str.contains(pdf_stem, case=False, na=False, regex=False)
+                ]
+            
+            # Strategy 3: Try file_name column if it exists
+            if matching_rows.empty and 'file_name' in ground_truth_df.columns:
+                matching_rows = ground_truth_df[
+                    ground_truth_df['file_name'].astype(str).str.contains(pdf_stem, case=False, na=False, regex=False)
+                ]
             
             if matching_rows.empty:
-                logger.warning(f"No ground truth found for {pdf_path.name}")
+                logger.warning(f"No ground truth found for {folder_name}/{pdf_path.name} (tried quotation_id: {quotation_id_match.group() if quotation_id_match else 'N/A'})")
+                skipped_count += 1
+                folder_stats[folder_name]['skipped'] += 1
                 continue
             
-            # Process each matching row (there might be multiple parts)
-            for idx, row in matching_rows.iterrows():
+            logger.info(f"Found {len(matching_rows)} matching row(s) for {folder_name}/{pdf_path.name}")
+            
+            # Group by quotation_id and merge all rows for the same quotation
+            # (in case multiple rows exist for same quotation with different parts)
+            for quotation_id, group in matching_rows.groupby('quotation_id'):
+                # If multiple rows for same quotation, we'll merge all parts
+                # For now, just use the first row (since each row can have up to 3 parts)
+                row = group.iloc[0]
+                
                 ground_truth_json = self.format_ground_truth_to_json(row)
                 training_sample = self.create_training_sample(pdf_text, ground_truth_json)
                 training_samples.append(training_sample)
+                processed_count += 1
+                folder_stats[folder_name]['processed'] += 1
+                
+                logger.info(f"✓ Created training sample for {folder_name}/quotation_{quotation_id} with {len(ground_truth_json['parts'])} part(s)")
         
         # Write to JSONL file
+        logger.info(f"\n{'='*80}")
         logger.info(f"Writing {len(training_samples)} training samples to {self.output_path}")
         
         with open(self.output_path, 'w', encoding='utf-8') as f:
             for sample in training_samples:
                 f.write(json.dumps(sample, ensure_ascii=False) + '\n')
         
-        logger.info(f"Dataset processing complete! Output saved to {self.output_path}")
+        logger.info(f"{'='*80}")
+        logger.info(f"Dataset processing complete!")
+        logger.info(f"✓ Processed: {processed_count} quotations")
+        logger.info(f"✗ Skipped: {skipped_count} files")
+        logger.info(f"\nBreakdown by folder:")
+        for folder_name, stats in folder_stats.items():
+            logger.info(f"  {folder_name}: {stats['processed']} processed, {stats['skipped']} skipped")
+        logger.info(f"\n📁 Output: {self.output_path}")
+        logger.info(f"{'='*80}")
 
 
 def main():
@@ -331,7 +415,7 @@ def main():
         '--pdf-folder',
         type=str,
         required=True,
-        help='Path to folder containing quotation PDF files'
+        help='Path to parent folder containing subdirectories of quotation PDF files (each subdirectory = different template)'
     )
     
     parser.add_argument(
@@ -352,7 +436,7 @@ def main():
     
     # Create processor and run
     processor = RFQDatasetProcessor(
-        pdf_folder=Path(args.pdf_folder),
+        pdf_parent_folder=Path(args.pdf_folder),
         xlsx_path=Path(args.xlsx_path),
         output_path=Path(args.output_path)
     )

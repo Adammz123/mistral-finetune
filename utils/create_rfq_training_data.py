@@ -22,9 +22,24 @@ def main():
         epilog="""
 Example usage:
     python create_rfq_training_data.py \\
-        --pdf-folder /path/to/quotation_pdfs \\
+        --pdf-folder /path/to/quotations \\
         --xlsx-path /path/to/ground_truth.xlsx \\
         --output-path /path/to/output/rfq_training_data.jsonl
+
+Directory structure:
+    /path/to/quotations/
+        ├── template1/
+        │   ├── quote_105826.pdf
+        │   ├── quote_106044.pdf
+        ├── template2/
+        │   ├── quote_105826.pdf
+        │   ├── quote_106044.pdf
+        └── template3/
+            ├── quote_105826.pdf
+            ├── quote_106044.pdf
+    
+    The script will automatically discover all subdirectories containing PDFs.
+    Each subdirectory represents a different PDF format/template for the same quotations.
 
 Expected XLSX structure:
     The XLSX file should contain columns matching the JSON structure:
@@ -61,7 +76,7 @@ Expected XLSX structure:
         '--pdf-folder',
         type=str,
         required=True,
-        help='Path to folder containing quotation PDF files'
+        help='Path to parent folder containing subdirectories of quotation PDFs (automatically discovers all subdirectories)'
     )
     
     parser.add_argument(
@@ -81,22 +96,24 @@ Expected XLSX structure:
     args = parser.parse_args()
     
     # Validate inputs
-    pdf_folder = Path(args.pdf_folder)
+    pdf_parent_folder = Path(args.pdf_folder)
     xlsx_path = Path(args.xlsx_path)
     output_path = Path(args.output_path)
     
-    if not pdf_folder.exists():
-        print(f"Error: PDF folder does not exist: {pdf_folder}")
+    if not pdf_parent_folder.exists():
+        print(f"Error: PDF parent folder does not exist: {pdf_parent_folder}")
         sys.exit(1)
     
     if not xlsx_path.exists():
         print(f"Error: XLSX file does not exist: {xlsx_path}")
         sys.exit(1)
     
-    # Create processor and run
+    # Create processor and run (it will auto-discover subdirectories)
     print("Initializing RFQ Dataset Processor...")
+    print(f"Parent folder: {pdf_parent_folder}")
+    
     processor = RFQDatasetProcessor(
-        pdf_folder=pdf_folder,
+        pdf_parent_folder=pdf_parent_folder,
         xlsx_path=xlsx_path,
         output_path=output_path
     )
