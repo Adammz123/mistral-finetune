@@ -335,41 +335,55 @@ class RFQDatasetProcessor:
             
             pdf_text = extraction_result['text_content']
             
-            # Find matching ground truth - match by filename or quotation_id
-            # Try multiple matching strategies
+            # Find matching ground truth by row index
+            # Filename format: tmp_N.pdf or name_N.pdf where N is the row number in Excel
             pdf_stem = pdf_path.stem  # filename without extension
             
-            # Strategy 1: Extract quotation_id from filename (e.g., "quote_106094.pdf" -> "106094")
-            quotation_id_match = re.search(r'\d+', pdf_stem)
+            # Extract number from filename (e.g., "tmp_1204.pdf" -> "1204")
+            number_match = re.search(r'\d+', pdf_stem)
             
             matching_rows = pd.DataFrame()
+            match_strategy = None
             
-            if quotation_id_match:
-                quotation_id = quotation_id_match.group()
-                # Try exact match first
-                matching_rows = ground_truth_df[
-                    ground_truth_df['quotation_id'].astype(str) == quotation_id
-                ]
+            if number_match:
+                extracted_number = int(number_match.group())
+                
+                # Strategy 1: Row index matching (primary strategy)
+                # Try 0-indexed first (pandas default)
+                if 0 <= extracted_number < len(ground_truth_df):
+                    matching_rows = ground_truth_df.iloc[[extracted_number]]
+                    match_strategy = f"row_index={extracted_number} (0-indexed)"
+                
+                # Strategy 2: Try 1-indexed (Excel row number accounting for header row)
+                # Row 1 in Excel (after header) = pandas index 0
+                # So Excel row N = pandas index N-1
+                elif matching_rows.empty and 1 <= extracted_number <= len(ground_truth_df):
+                    matching_rows = ground_truth_df.iloc[[extracted_number - 1]]
+                    match_strategy = f"Excel_row={extracted_number} (pandas_index={extracted_number - 1})"
+                
+                # Strategy 3: Fallback - try matching quotation_id if row index fails
+                if matching_rows.empty:
+                    matching_rows = ground_truth_df[
+                        ground_truth_df['quotation_id'].astype(str) == str(extracted_number)
+                    ]
+                    if not matching_rows.empty:
+                        match_strategy = f"quotation_id={extracted_number}"
+            else:
+                # No number in filename - try file_name column if it exists
+                if 'file_name' in ground_truth_df.columns:
+                    matching_rows = ground_truth_df[
+                        ground_truth_df['file_name'].astype(str).str.contains(pdf_stem, case=False, na=False, regex=False)
+                    ]
+                    if not matching_rows.empty:
+                        match_strategy = f"file_name contains '{pdf_stem}'"
             
-            # Strategy 2: If no exact match, try contains
             if matching_rows.empty:
-                matching_rows = ground_truth_df[
-                    ground_truth_df['quotation_id'].astype(str).str.contains(pdf_stem, case=False, na=False, regex=False)
-                ]
-            
-            # Strategy 3: Try file_name column if it exists
-            if matching_rows.empty and 'file_name' in ground_truth_df.columns:
-                matching_rows = ground_truth_df[
-                    ground_truth_df['file_name'].astype(str).str.contains(pdf_stem, case=False, na=False, regex=False)
-                ]
-            
-            if matching_rows.empty:
-                logger.warning(f"No ground truth found for {folder_name}/{pdf_path.name} (tried quotation_id: {quotation_id_match.group() if quotation_id_match else 'N/A'})")
+                logger.warning(f"No ground truth found for {folder_name}/{pdf_path.name} (number: {extracted_number if number_match else 'none'}, rows available: 0-{len(ground_truth_df)-1})")
                 skipped_count += 1
                 folder_stats[folder_name]['skipped'] += 1
                 continue
             
-            logger.info(f"Found {len(matching_rows)} matching row(s) for {folder_name}/{pdf_path.name}")
+            logger.info(f"Found {len(matching_rows)} matching row(s) for {folder_name}/{pdf_path.name} (strategy: {match_strategy})")
             
             # Group by quotation_id and merge all rows for the same quotation
             # (in case multiple rows exist for same quotation with different parts)
