@@ -1,8 +1,8 @@
 # data
 data:
-  instruct_data: "data/example/ultrachat_chunk_train.jsonl"  # Fill
+  instruct_data: "data/rfq/rfq_training_data.jsonl"  # Fill
   data: ""  # Optionally fill with pretraining data
-  eval_instruct_data: "data/example/ultrachat_chunk_eval.jsonl"  # Optionally fill
+  eval_instruct_data: "data/rfq/rfq_training_data.jsonl"  # Optionally fill
 
 # model
 model_id_or_path: "/mnt/d/Program Files/RFQ Application/Models/Mistral-7B-Instruct-v0-3"  # Change to downloaded path
