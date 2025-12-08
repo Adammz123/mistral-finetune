@@ -13,4 +13,6 @@ pandas
 pyarrow
 fastparquet
 mistral-common[sentencepiece]
+pdfplumber
+openpyxl
 
