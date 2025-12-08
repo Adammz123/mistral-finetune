@@ -338,60 +338,40 @@ class RFQDatasetProcessor:
                 pdf_text = extraction_result['text_content']
                 
                 # Find matching ground truth by row index
-                # Filename format: tmp_N.pdf or name_N.pdf where N is the row number in Excel
+                # Filename format: tmp_N.pdf where N-1 is the pandas row index
+                # e.g., tmp_1.pdf → pandas index 0, tmp_2.pdf → pandas index 1
                 pdf_stem = pdf_path.stem
                 
-                # Extract number from filename (e.g., "tmp_1204.pdf" -> "1204")
+                # Extract number from filename (e.g., "tmp_1.pdf" -> 1)
                 number_match = re.search(r'\d+', pdf_stem)
                 
-                matching_rows = pd.DataFrame()
-                match_strategy = None
-                
-                if number_match:
-                    extracted_number = int(number_match.group())
-                    
-                    # Strategy 1: Row index matching (0-indexed, pandas default)
-                    if 0 <= extracted_number < len(ground_truth_df):
-                        matching_rows = ground_truth_df.iloc[[extracted_number]]
-                        match_strategy = f"row_{extracted_number}"
-                    
-                    # Strategy 2: Try 1-indexed (Excel row accounting for header)
-                    elif matching_rows.empty and 1 <= extracted_number <= len(ground_truth_df):
-                        matching_rows = ground_truth_df.iloc[[extracted_number - 1]]
-                        match_strategy = f"excel_row_{extracted_number}"
-                    
-                    # Strategy 3: Fallback - try matching quotation_id
-                    if matching_rows.empty:
-                        matching_rows = ground_truth_df[
-                            ground_truth_df['quotation_id'].astype(str) == str(extracted_number)
-                        ]
-                        if not matching_rows.empty:
-                            match_strategy = f"quote_id"
-                else:
-                    # No number in filename - try file_name column if it exists
-                    if 'file_name' in ground_truth_df.columns:
-                        matching_rows = ground_truth_df[
-                            ground_truth_df['file_name'].astype(str).str.contains(pdf_stem, case=False, na=False, regex=False)
-                        ]
-                        if not matching_rows.empty:
-                            match_strategy = f"filename"
-                
-                if matching_rows.empty:
-                    tqdm.write(f"⚠️  No ground truth: {folder_name}/{pdf_path.name}")
+                if not number_match:
+                    tqdm.write(f"⚠️  No number in filename: {folder_name}/{pdf_path.name}")
                     skipped_count += 1
                     folder_stats[folder_name]['skipped'] += 1
                     pbar.update(1)
                     continue
                 
-                # Group by quotation_id and create training samples
-                for quotation_id, group in matching_rows.groupby('quotation_id'):
-                    row = group.iloc[0]
-                    
-                    ground_truth_json = self.format_ground_truth_to_json(row)
-                    training_sample = self.create_training_sample(pdf_text, ground_truth_json)
-                    training_samples.append(training_sample)
-                    processed_count += 1
-                    folder_stats[folder_name]['processed'] += 1
+                extracted_number = int(number_match.group())
+                pandas_index = extracted_number - 1
+                
+                # Check if index is valid
+                if pandas_index < 0 or pandas_index >= len(ground_truth_df):
+                    tqdm.write(f"⚠️  Index out of range: {folder_name}/{pdf_path.name} (index {pandas_index})")
+                    skipped_count += 1
+                    folder_stats[folder_name]['skipped'] += 1
+                    pbar.update(1)
+                    continue
+                
+                # Get the corresponding row
+                row = ground_truth_df.iloc[pandas_index]
+                
+                # Create training sample
+                ground_truth_json = self.format_ground_truth_to_json(row)
+                training_sample = self.create_training_sample(pdf_text, ground_truth_json)
+                training_samples.append(training_sample)
+                processed_count += 1
+                folder_stats[folder_name]['processed'] += 1
                 
                 pbar.update(1)
         
