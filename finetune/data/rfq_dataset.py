@@ -269,18 +269,17 @@ class RFQDatasetProcessor:
         # Convert ground truth to JSON string for the assistant response
         assistant_response = json.dumps(ground_truth_json, indent=2)
         
-        # Create the training sample
+        # Create the training sample in proper Mistral format
+        # Note: We only use 'messages' format. The 'prompt' field is NOT used during training.
         sample = {
-            "prompt": full_prompt,
-            "prompt_id": self.generate_prompt_id(pdf_text),
             "messages": [
                 {
-                    "content": full_prompt,
-                    "role": "user"
+                    "role": "user",
+                    "content": full_prompt
                 },
                 {
-                    "content": assistant_response,
-                    "role": "assistant"
+                    "role": "assistant",
+                    "content": assistant_response
                 }
             ]
         }
