@@ -337,34 +337,45 @@ class RFQDatasetProcessor:
                 
                 pdf_text = extraction_result['text_content']
                 
-                # Find matching ground truth by row index
-                # Filename format: tmp_N.pdf where N-1 is the pandas row index
-                # e.g., tmp_1.pdf → pandas index 0, tmp_2.pdf → pandas index 1
+                # Find matching ground truth by 'Filename reference number' column
+                # Filename format: "Q format D1-1.pdf", "Q format Q1-2.pdf", etc.
+                # Extract the number after the last hyphen
                 pdf_stem = pdf_path.stem
                 
-                # Extract number from filename (e.g., "tmp_1.pdf" -> 1)
-                number_match = re.search(r'\d+', pdf_stem)
+                # Extract number after last hyphen (e.g., "Q format D1-1" -> "1")
+                number_match = re.search(r'-(\d+)$', pdf_stem)
                 
                 if not number_match:
-                    tqdm.write(f"⚠️  No number in filename: {folder_name}/{pdf_path.name}")
+                    tqdm.write(f"⚠️  No reference number in filename: {folder_name}/{pdf_path.name}")
                     skipped_count += 1
                     folder_stats[folder_name]['skipped'] += 1
                     pbar.update(1)
                     continue
                 
-                extracted_number = int(number_match.group())
-                pandas_index = extracted_number - 1
+                reference_number = int(number_match.group(1))
                 
-                # Check if index is valid
-                if pandas_index < 0 or pandas_index >= len(ground_truth_df):
-                    tqdm.write(f"⚠️  Index out of range: {folder_name}/{pdf_path.name} (index {pandas_index})")
+                # Check if 'Filename reference number' column exists
+                if 'Filename reference number' not in ground_truth_df.columns:
+                    tqdm.write(f"⚠️  'Filename reference number' column not found in Excel file")
                     skipped_count += 1
                     folder_stats[folder_name]['skipped'] += 1
                     pbar.update(1)
                     continue
                 
-                # Get the corresponding row
-                row = ground_truth_df.iloc[pandas_index]
+                # Find matching row by reference number
+                matching_rows = ground_truth_df[
+                    ground_truth_df['Filename reference number'] == reference_number
+                ]
+                
+                if matching_rows.empty:
+                    tqdm.write(f"⚠️  No match for reference number {reference_number}: {folder_name}/{pdf_path.name}")
+                    skipped_count += 1
+                    folder_stats[folder_name]['skipped'] += 1
+                    pbar.update(1)
+                    continue
+                
+                # Get the first matching row (should only be one)
+                row = matching_rows.iloc[0]
                 
                 # Create training sample
                 ground_truth_json = self.format_ground_truth_to_json(row)
