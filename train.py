@@ -3,6 +3,7 @@ import logging
 import os
 import pprint
 from contextlib import ExitStack
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -85,8 +86,19 @@ def _train(
         )
 
     # 2. Init run dir
-    main_logger_info(f"Run dir: {args.run_dir}")
-    run_dir = Path(args.run_dir)
+    # Append timestamp to run_dir folder name
+    base_run_dir = Path(args.run_dir)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Append timestamp to the folder name (e.g., "runs/example" -> "runs/example_20240101_120000")
+    # Handle both absolute and relative paths
+    if base_run_dir.name:  # If there's a folder name
+        run_dir = base_run_dir.parent / f"{base_run_dir.name}_{timestamp}"
+    else:
+        # Fallback if somehow the path has no name
+        run_dir = Path(f"{base_run_dir}_{timestamp}")
+    
+    main_logger_info(f"Run dir: {run_dir} (base: {base_run_dir})")
 
     if is_torchrun():
         if run_dir.exists():
