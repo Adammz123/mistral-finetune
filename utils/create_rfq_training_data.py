@@ -96,6 +96,13 @@ Expected XLSX structure:
         help='Path to output JSONL file (will be created if it does not exist)'
     )
     
+    parser.add_argument(
+        '--max-workers',
+        type=int,
+        default=None,
+        help='Maximum number of worker threads for parallel processing (default: CPU count + 4, max 32)'
+    )
+    
     args = parser.parse_args()
     
     # Validate inputs
@@ -122,7 +129,7 @@ Expected XLSX structure:
     )
     
     print("Processing dataset...")
-    processor.process_dataset()
+    processor.process_dataset(max_workers=args.max_workers)
     
     print(f"\n✓ Training data successfully created at: {output_path}")
     print(f"✓ You can now use this file for fine-tuning")

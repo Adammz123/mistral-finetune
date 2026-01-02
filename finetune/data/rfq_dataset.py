@@ -5,9 +5,10 @@ import argparse
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import hashlib
 
 import pdfplumber
@@ -303,7 +304,70 @@ class RFQDatasetProcessor:
         
         return sample
     
-    def process_dataset(self) -> None:
+    def _process_single_pdf(
+        self, 
+        pdf_path: Path, 
+        folder_name: str, 
+        ground_truth_df: pd.DataFrame,
+        reference_column: Optional[str]
+    ) -> Tuple[Optional[Dict[str, Any]], bool, str]:
+        """
+        Process a single PDF file and return the training sample.
+        
+        Args:
+            pdf_path: Path to the PDF file
+            folder_name: Name of the folder containing the PDF
+            ground_truth_df: DataFrame with ground truth data
+            reference_column: Name of the reference column in the DataFrame
+            
+        Returns:
+            Tuple of (training_sample, success, error_message)
+            - training_sample: Dict if successful, None otherwise
+            - success: True if processing succeeded, False otherwise
+            - error_message: Error message if failed, empty string if succeeded
+        """
+        try:
+            # Extract text from PDF
+            extraction_result = self.extract_text_from_pdf(pdf_path)
+            
+            if not extraction_result['success']:
+                return None, False, f"Extraction error: {extraction_result.get('error', 'Unknown error')}"
+            
+            pdf_text = extraction_result['text_content']
+            
+            # Extract reference number from filename
+            pdf_stem = pdf_path.stem
+            number_match = re.search(r'-(\d+)$', pdf_stem)
+            
+            if not number_match:
+                return None, False, f"No reference number in filename: {pdf_path.name}"
+            
+            reference_number = int(number_match.group(1))
+            
+            # Find matching row by reference number
+            if reference_column is None:
+                return None, False, "Reference column not found in Excel file"
+            
+            matching_rows = ground_truth_df[
+                ground_truth_df[reference_column] == reference_number
+            ]
+            
+            if matching_rows.empty:
+                return None, False, f"No match for reference number {reference_number}"
+            
+            # Get the first matching row (should only be one)
+            row = matching_rows.iloc[0]
+            
+            # Create training sample (pass folder_name to use folder-to-supplier mapping)
+            ground_truth_json = self.format_ground_truth_to_json(row, folder_name=folder_name)
+            training_sample = self.create_training_sample(pdf_text, ground_truth_json)
+            
+            return training_sample, True, ""
+            
+        except Exception as e:
+            return None, False, f"Unexpected error: {str(e)}"
+    
+    def process_dataset(self, max_workers: Optional[int] = None) -> None:
         """Process all PDFs from all folders and create training dataset."""
         print("Starting dataset processing...")
         print(f"Processing {len(self.pdf_folders)} PDF template folder(s)")
@@ -327,88 +391,73 @@ class RFQDatasetProcessor:
         # Create output directory if it doesn't exist
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Process each PDF and create training samples
+        # Determine reference column name
+        reference_column = None
+        if 'Filename reference' in ground_truth_df.columns:
+            reference_column = 'Filename reference'
+        elif 'Filename reference number' in ground_truth_df.columns:
+            reference_column = 'Filename reference number'
+        
+        if reference_column is None:
+            logger.error("'Filename reference' or 'Filename reference number' column not found in Excel file")
+            print("❌ ERROR: 'Filename reference' or 'Filename reference number' column not found in Excel file")
+            return
+        
+        # Process PDFs in parallel using ThreadPoolExecutor
         training_samples = []
         processed_count = 0
         skipped_count = 0
         folder_stats = {}
         
-        # Use tqdm for progress bar
-        with tqdm(total=len(all_pdf_files), desc="Processing PDFs", unit="pdf") as pbar:
-            for pdf_path, folder_name in all_pdf_files:
-                if folder_name not in folder_stats:
-                    folder_stats[folder_name] = {'processed': 0, 'skipped': 0}
-                
-                # Update progress bar description with current file
-                pbar.set_postfix_str(f"{pdf_path.stem}")
-                
-                # Extract text from PDF
-                extraction_result = self.extract_text_from_pdf(pdf_path)
-                
-                if not extraction_result['success']:
-                    tqdm.write(f"⚠️  Extraction error: {folder_name}/{pdf_path.name}")
-                    skipped_count += 1
-                    folder_stats[folder_name]['skipped'] += 1
+        # Use ThreadPoolExecutor for parallel processing (I/O bound operations)
+        # Default to number of CPU cores, but cap at reasonable limit for I/O
+        if max_workers is None:
+            import os
+            max_workers = min(32, (os.cpu_count() or 1) + 4)  # Default: CPU count + 4, max 32
+        
+        print(f"Using {max_workers} worker threads for parallel processing\n")
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_pdf = {
+                executor.submit(
+                    self._process_single_pdf,
+                    pdf_path,
+                    folder_name,
+                    ground_truth_df,
+                    reference_column
+                ): (pdf_path, folder_name)
+                for pdf_path, folder_name in all_pdf_files
+            }
+            
+            # Process completed tasks with progress bar
+            with tqdm(total=len(all_pdf_files), desc="Processing PDFs", unit="pdf") as pbar:
+                for future in as_completed(future_to_pdf):
+                    pdf_path, folder_name = future_to_pdf[future]
+                    
+                    # Initialize folder stats if needed
+                    if folder_name not in folder_stats:
+                        folder_stats[folder_name] = {'processed': 0, 'skipped': 0}
+                    
+                    try:
+                        training_sample, success, error_message = future.result()
+                        
+                        if success and training_sample:
+                            training_samples.append(training_sample)
+                            processed_count += 1
+                            folder_stats[folder_name]['processed'] += 1
+                        else:
+                            tqdm.write(f"⚠️  {error_message}: {folder_name}/{pdf_path.name}")
+                            skipped_count += 1
+                            folder_stats[folder_name]['skipped'] += 1
+                    except Exception as e:
+                        tqdm.write(f"⚠️  Exception processing {folder_name}/{pdf_path.name}: {str(e)}")
+                        skipped_count += 1
+                        folder_stats[folder_name]['skipped'] += 1
+                    
+                    # Update progress bar
+                    pbar.set_postfix_str(f"{pdf_path.stem}")
                     pbar.update(1)
-                    continue
-                
-                pdf_text = extraction_result['text_content']
-                
-                # Find matching ground truth by 'Filename reference' column
-                # Filename format: "Q format D12-11.pdf", "Q format G12-1.pdf", etc.
-                # Extract the number after the last hyphen
-                pdf_stem = pdf_path.stem
-                
-                # Extract number after last hyphen (e.g., "Q format D12-11" -> "11", "Q format G12-1" -> "1")
-                number_match = re.search(r'-(\d+)$', pdf_stem)
-                
-                if not number_match:
-                    tqdm.write(f"⚠️  No reference number in filename: {folder_name}/{pdf_path.name}")
-                    skipped_count += 1
-                    folder_stats[folder_name]['skipped'] += 1
-                    pbar.update(1)
-                    continue
-                
-                reference_number = int(number_match.group(1))
-                
-                # Check if 'Filename reference' or 'Filename reference number' column exists
-                # Try 'Filename reference' first (new format), then fall back to 'Filename reference number' (old format)
-                reference_column = None
-                if 'Filename reference' in ground_truth_df.columns:
-                    reference_column = 'Filename reference'
-                elif 'Filename reference number' in ground_truth_df.columns:
-                    reference_column = 'Filename reference number'
-                
-                if reference_column is None:
-                    tqdm.write(f"⚠️  'Filename reference' or 'Filename reference number' column not found in Excel file")
-                    skipped_count += 1
-                    folder_stats[folder_name]['skipped'] += 1
-                    pbar.update(1)
-                    continue
-                
-                # Find matching row by reference number
-                matching_rows = ground_truth_df[
-                    ground_truth_df[reference_column] == reference_number
-                ]
-                
-                if matching_rows.empty:
-                    tqdm.write(f"⚠️  No match for reference number {reference_number}: {folder_name}/{pdf_path.name}")
-                    skipped_count += 1
-                    folder_stats[folder_name]['skipped'] += 1
-                    pbar.update(1)
-                    continue
-                
-                # Get the first matching row (should only be one)
-                row = matching_rows.iloc[0]
-                
-                # Create training sample (pass folder_name to use folder-to-supplier mapping)
-                ground_truth_json = self.format_ground_truth_to_json(row, folder_name=folder_name)
-                training_sample = self.create_training_sample(pdf_text, ground_truth_json)
-                training_samples.append(training_sample)
-                processed_count += 1
-                folder_stats[folder_name]['processed'] += 1
-                
-                pbar.update(1)
         
         # Write to JSONL file
         print(f"\n{'='*80}")
@@ -473,6 +522,13 @@ def main():
         help='Path to output JSONL file'
     )
     
+    parser.add_argument(
+        '--max-workers',
+        type=int,
+        default=None,
+        help='Maximum number of worker threads for parallel processing (default: CPU count + 4, max 32)'
+    )
+    
     args = parser.parse_args()
     
     # Create processor and run
@@ -482,7 +538,7 @@ def main():
         output_path=Path(args.output_path)
     )
     
-    processor.process_dataset()
+    processor.process_dataset(max_workers=args.max_workers)
 
 
 if __name__ == '__main__':
