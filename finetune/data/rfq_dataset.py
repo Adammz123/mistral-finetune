@@ -27,13 +27,71 @@ logger = logging.getLogger(__name__)
 class RFQDatasetProcessor:
     """Process RFQ quotations from PDFs and ground truth XLSX files."""
     
-    # Mapping of folder names to supplier names
-    FOLDER_TO_SUPPLIER = {
-        'D12': 'Digikey',
-        'G12': 'Glenair, Inc',
-        'H12a': 'Heilind',
-        'K12': 'Kensington Electronics',
-        'P12': 'PEI Genesis',
+    # Default mapping of folder names to supplier information (used as fallback)
+    # Each entry contains supplier_name and fields_in_pdf which indicates
+    # which fields exist in the PDF quotations (True) or not (False)
+    # If a field is False, it will be set to None in the output even if present in Excel
+    DEFAULT_FOLDER_TO_SUPPLIER = {
+        'D12': {
+            'supplier_name': 'Digikey',
+            'fields_in_pdf': {
+                'part_number': True,
+                'part_description': True,
+                'manufacturer': True,
+                'unit_of_measure': True,
+                'lead_time_days_weeks': True,
+                'tariff_charge': True,
+                'minimum_order_quantity': True,
+            }
+        },
+        'G12': {
+            'supplier_name': 'Glenair, Inc',
+            'fields_in_pdf': {
+                'part_number': True,
+                'part_description': True,
+                'manufacturer': True,
+                'unit_of_measure': True,
+                'lead_time_days_weeks': True,
+                'tariff_charge': True,
+                'minimum_order_quantity': True,
+            }
+        },
+        'H12a': {
+            'supplier_name': 'Heilind',
+            'fields_in_pdf': {
+                'part_number': True,
+                'part_description': True,
+                'manufacturer': True,
+                'unit_of_measure': True,
+                'lead_time_days_weeks': True,
+                'tariff_charge': True,
+                'minimum_order_quantity': True,
+            }
+        },
+        'K12': {
+            'supplier_name': 'Kensington Electronics',
+            'fields_in_pdf': {
+                'part_number': True,
+                'part_description': True,
+                'manufacturer': True,
+                'unit_of_measure': True,
+                'lead_time_days_weeks': True,
+                'tariff_charge': True,
+                'minimum_order_quantity': True,
+            }
+        },
+        'P12': {
+            'supplier_name': 'PEI Genesis',
+            'fields_in_pdf': {
+                'part_number': True,
+                'part_description': True,
+                'manufacturer': True,
+                'unit_of_measure': True,
+                'lead_time_days_weeks': True,
+                'tariff_charge': True,
+                'minimum_order_quantity': True,
+            }
+        },
     }
     
     def __init__(self, pdf_parent_folder: Path, xlsx_path: Path, output_path: Path):
@@ -57,6 +115,9 @@ class RFQDatasetProcessor:
         if not self.xlsx_path.exists():
             raise ValueError(f"XLSX file does not exist: {self.xlsx_path}")
         
+        # Load supplier configuration (automatically finds config file in relative directory)
+        self.folder_to_supplier = self._load_supplier_config()
+        
         # Automatically discover subdirectories containing PDFs
         self.pdf_folders = self._discover_pdf_folders()
         
@@ -67,6 +128,34 @@ class RFQDatasetProcessor:
         for folder in self.pdf_folders:
             pdf_count = len(list(folder.glob('*.pdf')))
             logger.info(f"  - {folder.name}: {pdf_count} PDF(s)")
+    
+    def _load_supplier_config(self) -> Dict[str, Any]:
+        """
+        Load supplier configuration from JSON file.
+        Automatically finds rfq_supplier_config.json in the same directory as this module.
+        
+        Returns:
+            Dictionary mapping folder names to supplier information
+        """
+        # Automatically find config file in the same directory as this module
+        config_path = Path(__file__).parent / 'rfq_supplier_config.json'
+        
+        # Try to load from file
+        if config_path.exists():
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                logger.info(f"Loaded supplier configuration from: {config_path}")
+                return config
+            except json.JSONDecodeError as e:
+                logger.warning(f"Error parsing config file {config_path}: {e}. Using default configuration.")
+                return self.DEFAULT_FOLDER_TO_SUPPLIER.copy()
+            except Exception as e:
+                logger.warning(f"Error loading config file {config_path}: {e}. Using default configuration.")
+                return self.DEFAULT_FOLDER_TO_SUPPLIER.copy()
+        else:
+            logger.info(f"Config file not found at {config_path}. Using default configuration.")
+            return self.DEFAULT_FOLDER_TO_SUPPLIER.copy()
     
     def _discover_pdf_folders(self) -> List[Path]:
         """
@@ -197,6 +286,38 @@ class RFQDatasetProcessor:
         logger.info(f"Loaded {len(df)} rows from ground truth file")
         return df
     
+    def _get_supplier_info(self, folder_name: Optional[str] = None) -> Tuple[Optional[str], Dict[str, bool]]:
+        """
+        Get supplier name and field existence flags for a folder.
+        
+        Args:
+            folder_name: Name of the folder containing the PDF
+            
+        Returns:
+            Tuple of (supplier_name, fields_in_pdf_dict)
+            - supplier_name: Supplier name if found, None otherwise
+            - fields_in_pdf_dict: Dictionary mapping field names to True/False
+        """
+        default_fields = {
+            'part_number': True,
+            'part_description': True,
+            'manufacturer': True,
+            'unit_of_measure': True,
+            'lead_time_days_weeks': True,
+            'tariff_charge': True,
+            'minimum_order_quantity': True,
+        }
+        
+        if folder_name and folder_name in self.folder_to_supplier:
+            supplier_info = self.folder_to_supplier[folder_name]
+            if isinstance(supplier_info, dict):
+                return supplier_info.get('supplier_name'), supplier_info.get('fields_in_pdf', default_fields)
+            else:
+                # Backward compatibility: if it's just a string, return it with default fields
+                return supplier_info, default_fields
+        
+        return None, default_fields
+    
     def format_ground_truth_to_json(self, row: pd.Series, folder_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Format a ground truth row into the expected JSON structure.
@@ -209,11 +330,11 @@ class RFQDatasetProcessor:
         Returns:
             Dictionary in the expected JSON format
         """
-        # Determine supplier_name from folder mapping if available, otherwise from Excel
-        supplier_name = None
-        if folder_name and folder_name in self.FOLDER_TO_SUPPLIER:
-            supplier_name = self.FOLDER_TO_SUPPLIER[folder_name]
-        elif pd.notna(row.get('supplier_name')):
+        # Get supplier info and field existence flags
+        supplier_name, fields_in_pdf = self._get_supplier_info(folder_name)
+        
+        # Fallback to Excel if supplier_name not found in mapping
+        if supplier_name is None and pd.notna(row.get('supplier_name')):
             supplier_name = str(row.get('supplier_name', ''))
         
         # Create the base structure with quotation-level information
@@ -240,26 +361,72 @@ class RFQDatasetProcessor:
             if part_num_col not in row or not pd.notna(row.get(part_num_col)):
                 continue
             
-            # Build part information
-            part = {
-                "part_number": str(row.get(f'part_number{suffix}', '')) if pd.notna(row.get(f'part_number{suffix}')) else '',
-                "part_description": str(row.get(f'part_description{suffix}', '')) if pd.notna(row.get(f'part_description{suffix}')) else '',
-                "manufacturer": f"{row.get('manufacturer', '')} / {row.get(f'Vendor Part Number{suffix}', '')}" if pd.notna(row.get(f'Vendor Part Number{suffix}')) else str(row.get('manufacturer', '')),
-                "unit_of_measure": str(row.get(f'unit_of_measure{suffix}', '')) if pd.notna(row.get(f'unit_of_measure{suffix}')) else '',
-                "lead_time_days_weeks": str(row.get(f'lead_time_days_weeks{suffix}', '')) if pd.notna(row.get(f'lead_time_days_weeks{suffix}')) else '',
-                "tariff_charge": str(row.get('tariff_charge', 'N/A')) if suffix == '' else 'N/A',  # Only first part has tariff
-                "price_breaks": []
-            }
+            # Build part information, checking field existence flags
+            part = {}
+            
+            # part_number
+            if fields_in_pdf.get('part_number', True):
+                part["part_number"] = str(row.get(f'part_number{suffix}', '')) if pd.notna(row.get(f'part_number{suffix}')) else ''
+            else:
+                part["part_number"] = None
+            
+            # part_description
+            if fields_in_pdf.get('part_description', True):
+                part["part_description"] = str(row.get(f'part_description{suffix}', '')) if pd.notna(row.get(f'part_description{suffix}')) else ''
+            else:
+                part["part_description"] = None
+            
+            # manufacturer
+            if fields_in_pdf.get('manufacturer', True):
+                manufacturer_str = f"{row.get('manufacturer', '')} / {row.get(f'Vendor Part Number{suffix}', '')}" if pd.notna(row.get(f'Vendor Part Number{suffix}')) else str(row.get('manufacturer', ''))
+                part["manufacturer"] = manufacturer_str if manufacturer_str else ''
+            else:
+                part["manufacturer"] = None
+            
+            # unit_of_measure
+            if fields_in_pdf.get('unit_of_measure', True):
+                part["unit_of_measure"] = str(row.get(f'unit_of_measure{suffix}', '')) if pd.notna(row.get(f'unit_of_measure{suffix}')) else ''
+            else:
+                part["unit_of_measure"] = None
+            
+            # lead_time_days_weeks
+            if fields_in_pdf.get('lead_time_days_weeks', True):
+                part["lead_time_days_weeks"] = str(row.get(f'lead_time_days_weeks{suffix}', '')) if pd.notna(row.get(f'lead_time_days_weeks{suffix}')) else ''
+            else:
+                part["lead_time_days_weeks"] = None
+            
+            # tariff_charge (only first part has tariff)
+            if suffix == '':
+                if fields_in_pdf.get('tariff_charge', True):
+                    part["tariff_charge"] = str(row.get('tariff_charge', 'N/A')) if pd.notna(row.get('tariff_charge')) else 'N/A'
+                else:
+                    part["tariff_charge"] = None
+            else:
+                part["tariff_charge"] = 'N/A'
+            
+            part["price_breaks"] = []
             
             # Build price break for this part
             quantity_col = f'quantity{suffix}' if suffix else 'quantity'
             if pd.notna(row.get(quantity_col)):
                 price_break = {
                     "quantity": int(row.get(quantity_col, 0)) if pd.notna(row.get(quantity_col)) else 0,
-                    "minimum_order_quantity": int(row.get(quantity_col, 0)) if pd.notna(row.get(quantity_col)) else 0,  # Use same as quantity if MOQ not available
                     "price_per_unit": float(row.get(f'price_per_unit{suffix}', 0.0)) if pd.notna(row.get(f'price_per_unit{suffix}')) else 0.0,
                     "total_price": float(row.get(f'total_price{suffix}', 0.0)) if pd.notna(row.get(f'total_price{suffix}')) else 0.0
                 }
+                
+                # minimum_order_quantity
+                if fields_in_pdf.get('minimum_order_quantity', True):
+                    # Try to get MOQ from Excel, fallback to quantity if not available
+                    moq_col = f'minimum_order_quantity{suffix}' if suffix else 'minimum_order_quantity'
+                    if pd.notna(row.get(moq_col)):
+                        price_break["minimum_order_quantity"] = int(row.get(moq_col, 0))
+                    else:
+                        # Use same as quantity if MOQ not available
+                        price_break["minimum_order_quantity"] = int(row.get(quantity_col, 0)) if pd.notna(row.get(quantity_col)) else 0
+                else:
+                    price_break["minimum_order_quantity"] = None
+                
                 part['price_breaks'].append(price_break)
             
             quotation_data['parts'].append(part)
@@ -531,7 +698,7 @@ def main():
     
     args = parser.parse_args()
     
-    # Create processor and run
+    # Create processor and run (config file is automatically found in relative directory)
     processor = RFQDatasetProcessor(
         pdf_parent_folder=Path(args.pdf_folder),
         xlsx_path=Path(args.xlsx_path),

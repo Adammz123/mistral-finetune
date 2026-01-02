@@ -1,0 +1,63 @@
+{
+  "D12": {
+    "supplier_name": "Digikey",
+    "fields_in_pdf": {
+      "part_number": true,
+      "part_description": true,
+      "manufacturer": true,
+      "unit_of_measure": true,
+      "lead_time_days_weeks": true,
+      "tariff_charge": true,
+      "minimum_order_quantity": true
+    }
+  },
+  "G12": {
+    "supplier_name": "Glenair, Inc",
+    "fields_in_pdf": {
+      "part_number": true,
+      "part_description": true,
+      "manufacturer": false,
+      "unit_of_measure": true,
+      "lead_time_days_weeks": true,
+      "tariff_charge": true,
+      "minimum_order_quantity": true
+    }
+  },
+  "H12a": {
+    "supplier_name": "Heilind",
+    "fields_in_pdf": {
+      "part_number": true,
+      "part_description": true,
+      "manufacturer": true,
+      "unit_of_measure": true,
+      "lead_time_days_weeks": true,
+      "tariff_charge": true,
+      "minimum_order_quantity": true
+    }
+  },
+  "K12": {
+    "supplier_name": "Kensington Electronics",
+    "fields_in_pdf": {
+      "part_number": true,
+      "part_description": true,
+      "manufacturer": true,
+      "unit_of_measure": true,
+      "lead_time_days_weeks": true,
+      "tariff_charge": true,
+      "minimum_order_quantity": true
+    }
+  },
+  "P12": {
+    "supplier_name": "PEI Genesis",
+    "fields_in_pdf": {
+      "part_number": true,
+      "part_description": true,
+      "manufacturer": true,
+      "unit_of_measure": true,
+      "lead_time_days_weeks": true,
+      "tariff_charge": true,
+      "minimum_order_quantity": true
+    }
+  }
+}
+

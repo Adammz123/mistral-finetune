@@ -118,7 +118,7 @@ Expected XLSX structure:
         print(f"Error: XLSX file does not exist: {xlsx_path}")
         sys.exit(1)
     
-    # Create processor and run (it will auto-discover subdirectories)
+    # Create processor and run (it will auto-discover subdirectories and config file)
     print("Initializing RFQ Dataset Processor...")
     print(f"Parent folder: {pdf_parent_folder}")
     
