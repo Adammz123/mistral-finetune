@@ -26,6 +26,15 @@ logger = logging.getLogger(__name__)
 class RFQDatasetProcessor:
     """Process RFQ quotations from PDFs and ground truth XLSX files."""
     
+    # Mapping of folder names to supplier names
+    FOLDER_TO_SUPPLIER = {
+        'D12': 'Digikey',
+        'G12': 'Glenair, Inc',
+        'H12a': 'Heilind',
+        'K12': 'Kensington Electronics',
+        'P12': 'PEI Genesis',
+    }
+    
     def __init__(self, pdf_parent_folder: Path, xlsx_path: Path, output_path: Path):
         """
         Initialize the RFQ dataset processor.
@@ -187,20 +196,28 @@ class RFQDatasetProcessor:
         logger.info(f"Loaded {len(df)} rows from ground truth file")
         return df
     
-    def format_ground_truth_to_json(self, row: pd.Series) -> Dict[str, Any]:
+    def format_ground_truth_to_json(self, row: pd.Series, folder_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Format a ground truth row into the expected JSON structure.
         This handles the specific format where each row may contain up to 3 parts.
         
         Args:
             row: A row from the ground truth DataFrame
+            folder_name: Name of the folder containing the PDF (used to determine supplier_name)
             
         Returns:
             Dictionary in the expected JSON format
         """
+        # Determine supplier_name from folder mapping if available, otherwise from Excel
+        supplier_name = None
+        if folder_name and folder_name in self.FOLDER_TO_SUPPLIER:
+            supplier_name = self.FOLDER_TO_SUPPLIER[folder_name]
+        elif pd.notna(row.get('supplier_name')):
+            supplier_name = str(row.get('supplier_name', ''))
+        
         # Create the base structure with quotation-level information
         quotation_data = {
-            "supplier_name": str(row.get('supplier_name', '')) if pd.notna(row.get('supplier_name')) else None,
+            "supplier_name": supplier_name,
             "quotation_id": str(row.get('quotation_id', '')),
             "valid_until_date": str(row.get('valid_until_date', ''))[:10] if pd.notna(row.get('valid_until_date')) else None,
             "incoterms": str(row.get('incoterms', '')) if pd.notna(row.get('incoterms')) and str(row.get('incoterms', '')).lower() not in ['null', 'nan', 'none', ''] else None,
@@ -384,8 +401,8 @@ class RFQDatasetProcessor:
                 # Get the first matching row (should only be one)
                 row = matching_rows.iloc[0]
                 
-                # Create training sample
-                ground_truth_json = self.format_ground_truth_to_json(row)
+                # Create training sample (pass folder_name to use folder-to-supplier mapping)
+                ground_truth_json = self.format_ground_truth_to_json(row, folder_name=folder_name)
                 training_sample = self.create_training_sample(pdf_text, ground_truth_json)
                 training_samples.append(training_sample)
                 processed_count += 1

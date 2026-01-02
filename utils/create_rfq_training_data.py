@@ -28,25 +28,27 @@ Example usage:
 
 Directory structure:
     /path/to/quotations/
-        ├── template1/
-        │   ├── quote_105826.pdf
-        │   ├── quote_106044.pdf
-        ├── template2/
-        │   ├── quote_105826.pdf
-        │   ├── quote_106044.pdf
-        └── template3/
-            ├── quote_105826.pdf
-            ├── quote_106044.pdf
+        ├── D12/                    # Folder name maps to supplier (D12 -> Digikey)
+        │   ├── Q format D12-1.pdf
+        │   ├── Q format D12-2.pdf
+        ├── G12/                    # Folder name maps to supplier (G12 -> Glenair, Inc)
+        │   ├── Q format G12-1.pdf
+        │   ├── Q format G12-2.pdf
+        └── H12a/                   # Folder name maps to supplier (H12a -> Heilind)
+            ├── Q format H12a-1.pdf
+            └── Q format H12a-2.pdf
     
     The script will automatically discover all subdirectories containing PDFs.
-    Each subdirectory represents a different PDF format/template for the same quotations.
+    Each subdirectory name maps to a supplier name (configured in the code).
+    Supplier names are determined from folder names, not from the Excel file.
 
 Expected XLSX structure:
     The XLSX file should contain columns matching the JSON structure:
     - Filename reference: Reference number (1, 2, 3, etc.) that matches the number
       in the PDF filename after the hyphen (e.g., "Q format D12-11" matches reference 11)
     - quotation_id: Unique identifier for the quotation
-    - supplier_name: Name of the supplier
+    - supplier_name: Name of the supplier (NOTE: This is overridden by folder-to-supplier mapping.
+      The supplier name is determined from the folder name, not from this column)
     - valid_until_date: Validity date of the quotation
     - incoterms: Incoterms (optional)
     - payment_terms: Payment terms (optional)
