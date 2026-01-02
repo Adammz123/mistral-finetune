@@ -43,6 +43,8 @@ Directory structure:
 
 Expected XLSX structure:
     The XLSX file should contain columns matching the JSON structure:
+    - Filename reference: Reference number (1, 2, 3, etc.) that matches the number
+      in the PDF filename after the hyphen (e.g., "Q format D12-11" matches reference 11)
     - quotation_id: Unique identifier for the quotation
     - supplier_name: Name of the supplier
     - valid_until_date: Validity date of the quotation
@@ -51,7 +53,6 @@ Expected XLSX structure:
     - warranty_terms: Warranty terms (optional)
     - currency: Currency code (e.g., USD, EUR)
     - additional_notes: Additional notes about the quotation
-    - file_name: PDF filename (for matching)
     
     Part information (one row per part or JSON in 'parts' column):
     - part_number: Part number

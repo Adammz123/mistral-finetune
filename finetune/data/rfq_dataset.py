@@ -337,12 +337,12 @@ class RFQDatasetProcessor:
                 
                 pdf_text = extraction_result['text_content']
                 
-                # Find matching ground truth by 'Filename reference number' column
-                # Filename format: "Q format D1-1.pdf", "Q format Q1-2.pdf", etc.
+                # Find matching ground truth by 'Filename reference' column
+                # Filename format: "Q format D12-11.pdf", "Q format G12-1.pdf", etc.
                 # Extract the number after the last hyphen
                 pdf_stem = pdf_path.stem
                 
-                # Extract number after last hyphen (e.g., "Q format D1-1" -> "1")
+                # Extract number after last hyphen (e.g., "Q format D12-11" -> "11", "Q format G12-1" -> "1")
                 number_match = re.search(r'-(\d+)$', pdf_stem)
                 
                 if not number_match:
@@ -354,9 +354,16 @@ class RFQDatasetProcessor:
                 
                 reference_number = int(number_match.group(1))
                 
-                # Check if 'Filename reference number' column exists
-                if 'Filename reference number' not in ground_truth_df.columns:
-                    tqdm.write(f"⚠️  'Filename reference number' column not found in Excel file")
+                # Check if 'Filename reference' or 'Filename reference number' column exists
+                # Try 'Filename reference' first (new format), then fall back to 'Filename reference number' (old format)
+                reference_column = None
+                if 'Filename reference' in ground_truth_df.columns:
+                    reference_column = 'Filename reference'
+                elif 'Filename reference number' in ground_truth_df.columns:
+                    reference_column = 'Filename reference number'
+                
+                if reference_column is None:
+                    tqdm.write(f"⚠️  'Filename reference' or 'Filename reference number' column not found in Excel file")
                     skipped_count += 1
                     folder_stats[folder_name]['skipped'] += 1
                     pbar.update(1)
@@ -364,7 +371,7 @@ class RFQDatasetProcessor:
                 
                 # Find matching row by reference number
                 matching_rows = ground_truth_df[
-                    ground_truth_df['Filename reference number'] == reference_number
+                    ground_truth_df[reference_column] == reference_number
                 ]
                 
                 if matching_rows.empty:
